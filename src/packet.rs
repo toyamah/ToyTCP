@@ -8,11 +8,12 @@ pub struct TCPPacket {
     buffer: Vec<u8>,
 }
 
+/// https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_segment_structure
+/// http://www.networksorcery.com/enp/protocol/tcp.htm
 impl TCPPacket {
     pub fn new(payload_len: usize) -> Self {
         Self {
             buffer: vec![0; TCP_HEADER_SIZE + payload_len],
-            // buffer: Vec::with_capacity(TCP_HEADER_SIZE + payload_len),
         }
     }
 

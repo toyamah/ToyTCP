@@ -13,7 +13,7 @@ pub struct Socket {
     pub remote_addr: Ipv4Addr,
     pub local_port: u16,
     pub remote_port: u16,
-    pub sender: TransportSender,
+    sender: TransportSender,
 }
 
 impl Socket {
@@ -25,7 +25,6 @@ impl Socket {
     ) -> io::Result<Self> {
         let (sender, _) = transport_channel(
             65535,
-            // TransportChannelType::Layer4(IpNextHeaderProtocols::Ipv4(IpNextHeaderProtocols::Tcp)),
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
         )?;
         Ok(Self {
@@ -45,7 +44,7 @@ impl Socket {
 
         let send_size = self
             .sender
-            .send_to(tcp_packet.clone(), IpAddr::V4(self.remote_addr))?;
+            .send_to(tcp_packet, IpAddr::V4(self.remote_addr))?;
 
         io::Result::Ok(send_size)
     }

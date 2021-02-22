@@ -1,5 +1,4 @@
 use crate::socket::{Socket, SocketID};
-use crate::tcp_flags;
 use std::collections::HashMap;
 use std::io;
 use std::io::Error;
@@ -28,15 +27,26 @@ impl TCP {
         33456
     }
 
-    pub fn connect(&self, addr: Ipv4Addr, port: u16) -> io::Result<SocketID> {
+    pub fn connect(&self, remote_addr: Ipv4Addr, remote_port: u16) -> io::Result<SocketID> {
         let mut socket = Socket::new(
             Ipv4Addr::new(10, 0, 0, 1),
-            addr,
+            remote_addr,
             self.select_unused_port(),
-            port,
+            remote_port,
         )?;
-        socket.send_tcp_packet(tcp_flags::SYN, &[])?;
+        socket.send_tcp_packet(flags::SYN, &[])?;
         let socket_id = socket.get_socket_id();
         io::Result::Ok(socket_id)
     }
+}
+
+mod flags {
+    pub const CWR: u8 = 1 << 7;
+    pub const ECE: u8 = 1 << 6;
+    pub const URG: u8 = 1 << 5;
+    pub const ACK: u8 = 1 << 4;
+    pub const PSH: u8 = 1 << 3;
+    pub const RST: u8 = 1 << 2;
+    pub const SYN: u8 = 1 << 1;
+    pub const FIN: u8 = 1;
 }
