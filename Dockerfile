@@ -2,7 +2,7 @@
 FROM ubuntu:18.04
 RUN apt-get update && apt install -y curl \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-RUN apt-get update && apt install -y \
+RUN apt install -y \
     sudo \
     net-tools \
     iptables \
