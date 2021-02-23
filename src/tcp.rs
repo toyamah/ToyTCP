@@ -40,7 +40,7 @@ impl TCP {
     }
 }
 
-mod flags {
+pub mod flags {
     pub const CWR: u8 = 1 << 7;
     pub const ECE: u8 = 1 << 6;
     pub const URG: u8 = 1 << 5;
@@ -49,4 +49,34 @@ mod flags {
     pub const RST: u8 = 1 << 2;
     pub const SYN: u8 = 1 << 1;
     pub const FIN: u8 = 1;
+
+    pub fn flag_to_string(flag: u8) -> String {
+        let mut string = String::new();
+        if flag & CWR > 0 {
+            string += "CWR ";
+        }
+        if flag & ECE > 0 {
+            string += "ECE ";
+        }
+        if flag & URG > 0 {
+            string += "URG ";
+        }
+        if flag & ACK > 0 {
+            string += "ACK ";
+        }
+        if flag & PSH > 0 {
+            string += "PSH ";
+        }
+        if flag & RST > 0 {
+            string += "RST ";
+        }
+        if flag & SYN > 0 {
+            string += "SYN ";
+        }
+        if flag & FIN > 0 {
+            string += "FIN ";
+        }
+
+        string
+    }
 }
