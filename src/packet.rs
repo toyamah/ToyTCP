@@ -1,5 +1,6 @@
 use crate::tcp;
 use pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
+use pnet::packet::tcp::TcpPacket;
 use pnet::packet::Packet;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -7,7 +8,7 @@ use std::io::{Bytes, Read};
 use std::net::Ipv4Addr;
 
 const TCP_HEADER_SIZE: usize = 20;
-const SOCKET_BUFFER_SIZE: usize = 4380;
+pub const SOCKET_BUFFER_SIZE: usize = 4380;
 
 #[derive(Clone)]
 pub struct TCPPacket {
@@ -65,12 +66,20 @@ impl TCPPacket {
         self.buffer[8..12].copy_from_slice(&ack.to_be_bytes());
     }
 
+    pub fn set_data_offset(&mut self, off_set: u8) {
+        self.buffer[12] |= off_set << 4;
+    }
+
     pub fn get_flag(&self) -> u8 {
         self.buffer[13]
     }
 
     pub fn set_flag(&mut self, flag: u8) {
         self.buffer[13] = flag
+    }
+
+    pub fn has_flag(&self, flag: u8) -> bool {
+        self.buffer[13] & flag > 0
     }
 
     pub fn get_window_size(&self) -> u16 {
@@ -89,7 +98,7 @@ impl TCPPacket {
         self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
     }
 
-    pub fn correct_checksum(&mut self, local_addr: Ipv4Addr, remote_addr: Ipv4Addr) -> bool {
+    pub fn correct_checksum(&self, local_addr: Ipv4Addr, remote_addr: Ipv4Addr) -> bool {
         self.get_checksum()
             == pnet::packet::util::ipv4_checksum(
                 &self.packet(),
@@ -99,6 +108,11 @@ impl TCPPacket {
                 &remote_addr,
                 IpNextHeaderProtocols::Tcp,
             )
+    }
+
+    pub fn set_payload(&mut self, payload: &[u8]) {
+        self.buffer[TCP_HEADER_SIZE..TCP_HEADER_SIZE + payload.len() as usize]
+            .copy_from_slice(payload);
     }
 }
 
@@ -126,5 +140,13 @@ impl Debug for TCPPacket {
             tcp::flags::flag_to_string(self.get_flag()),
             self.payload().len()
         )
+    }
+}
+
+impl<'a> From<TcpPacket<'a>> for TCPPacket {
+    fn from(packet: TcpPacket) -> Self {
+        Self {
+            buffer: packet.packet().to_vec(),
+        }
     }
 }

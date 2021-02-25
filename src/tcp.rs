@@ -9,12 +9,11 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::HashMap;
 use std::io;
-use std::io::Error;
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::{DerefMut, Range};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
 
 const UNDETERMINED_IP_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDEFINED_PORT: u16 = 0;
@@ -54,7 +53,7 @@ impl TCP {
     pub fn connect(&self, remote_addr: Ipv4Addr, remote_port: u16) -> anyhow::Result<SocketID> {
         let mut rng = rand::thread_rng();
         let mut socket = Socket::new(
-            Ipv4Addr::new(10, 0, 0, 1),
+            get_source_addr(remote_addr)?,
             remote_addr,
             self.select_unused_port(&mut rng)?,
             remote_port,
@@ -68,7 +67,6 @@ impl TCP {
         let socket_id = socket.get_socket_id();
         let mut table = self.sockets.write().unwrap();
         table.insert(socket_id, socket);
-
         std::mem::drop(table);
 
         self.wait_event(socket_id, TCPEventKind::ConnectionCompleted);
@@ -78,7 +76,7 @@ impl TCP {
     fn receive_handler(&self) {
         dbg!("begin recv thread");
         let (_, mut receiver) = transport_channel(
-            65532,
+            65535,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         )
         .unwrap();
@@ -86,9 +84,12 @@ impl TCP {
         loop {
             let (packet, remote_addr) = match packet_iter.next() {
                 Ok((p, r)) => (p, r),
-                Err(_) => continue,
+                Err(e) => {
+                    println!("err: {:?}", e);
+                    continue;
+                }
             };
-            let local_addr = packet.get_destination();
+            let local_addr: Ipv4Addr = packet.get_destination();
             let tcp_packet = match TcpPacket::new(packet.payload()) {
                 Some(p) => p,
                 None => continue,
@@ -109,8 +110,8 @@ impl TCP {
             let socket = table.get_mut(&SocketID(
                 local_addr,
                 remote_addr,
-                packet.get_src(),
                 packet.get_dest(),
+                packet.get_src(),
             ));
             let socket = if socket.is_some() {
                 socket
@@ -118,7 +119,7 @@ impl TCP {
                 table.get_mut(&SocketID(
                     local_addr,
                     UNDETERMINED_IP_ADDR,
-                    packet.get_src(),
+                    packet.get_dest(),
                     UNDEFINED_PORT,
                 ))
             };
