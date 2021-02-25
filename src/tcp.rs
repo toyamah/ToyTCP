@@ -83,24 +83,21 @@ impl TCP {
         let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
         loop {
             let (packet, remote_addr) = match packet_iter.next() {
-                Ok((p, r)) => (p, r),
+                Ok(tuple) => tuple,
                 Err(e) => {
                     println!("err: {:?}", e);
                     continue;
                 }
             };
             let local_addr: Ipv4Addr = packet.get_destination();
-            let tcp_packet = match TcpPacket::new(packet.payload()) {
+            let remote_addr = match remote_addr {
+                IpAddr::V4(addr) => addr,
+                IpAddr::V6(_) => continue,
+            };
+            let packet = match get_tcp_packet(&packet) {
                 Some(p) => p,
                 None => continue,
             };
-
-            let packet = TCPPacket::from(tcp_packet);
-            let remote_addr = match remote_addr {
-                IpAddr::V4(addr) => addr,
-                _ => continue,
-            };
-
             if !packet.correct_checksum(local_addr, remote_addr) {
                 dbg!("invalid checksum");
                 continue;
@@ -226,6 +223,13 @@ impl TCPEvent {
     fn new(socket_id: SocketID, kind: TCPEventKind) -> Self {
         Self { socket_id, kind }
     }
+}
+
+fn get_tcp_packet(pnet_packet: &pnet::packet::ipv4::Ipv4Packet) -> Option<TCPPacket> {
+    return match TcpPacket::new(pnet_packet.payload()) {
+        Some(p) => Some(TCPPacket::from(p)),
+        None => None,
+    };
 }
 
 fn get_source_addr(remote_addr: Ipv4Addr) -> anyhow::Result<Ipv4Addr> {
