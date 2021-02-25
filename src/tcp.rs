@@ -89,6 +89,7 @@ impl TCP {
                     continue;
                 }
             };
+            // the packet is a received one so destination means local addr.
             let local_addr: Ipv4Addr = packet.get_destination();
             let remote_addr = match remote_addr {
                 IpAddr::V4(addr) => addr,
@@ -103,10 +104,12 @@ impl TCP {
                 continue;
             }
 
+            // get Socket
             let mut table = self.sockets.write().unwrap();
             let socket = table.get_mut(&SocketID(
                 local_addr,
                 remote_addr,
+                // the packet is a received one so dest and src mean local and remote port respectively.
                 packet.get_dest(),
                 packet.get_src(),
             ));
@@ -125,6 +128,7 @@ impl TCP {
                 None => continue,
             };
 
+            // execute handler based on TcpStatus
             let result = match socket.status {
                 // TcpStatus::Listen => {}
                 TcpStatus::SynSent => self.synsent_handler(socket, &packet),
