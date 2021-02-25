@@ -131,7 +131,7 @@ impl TCP {
             // execute handler based on TcpStatus
             let result = match socket.status {
                 // TcpStatus::Listen => {}
-                TcpStatus::SynSent => self.synsent_handler(socket, &packet),
+                TcpStatus::SynSent => self.handle_packet_in_synsent(socket, &packet),
                 // TcpStatus::SynRcvd => {}
                 // TcpStatus::Established => {}
                 // TcpStatus::FinWait1 => {}
@@ -150,39 +150,51 @@ impl TCP {
         }
     }
 
-    fn synsent_handler(&self, socket: &mut Socket, packet: &TCPPacket) -> anyhow::Result<()> {
+    /// handles a received packet in synsent status
+    /// see https://tools.ietf.org/html/rfc793#section-3.4
+    fn handle_packet_in_synsent(
+        &self,
+        socket: &mut Socket,
+        packet: &TCPPacket,
+    ) -> anyhow::Result<()> {
         dbg!("synsent_handler");
-        if packet.has_flag(flags::ACK)
-            && socket.send_param.unacked_seq <= packet.get_ack()
-            && packet.get_ack() <= socket.send_param.next
-            && packet.has_flag(flags::SYN)
-        {
-            socket.recv_param.next = packet.get_seq() + 1;
-            socket.recv_param.initial_seq = packet.get_seq();
-            socket.send_param.unacked_seq = packet.get_ack();
-            socket.send_param.window = packet.get_window_size();
 
-            if socket.send_param.unacked_seq > socket.send_param.initial_seq {
-                socket.status = TcpStatus::Established;
-                socket.send_tcp_packet(
-                    socket.send_param.next,
-                    socket.recv_param.next,
-                    flags::ACK,
-                    &[],
-                )?;
-                dbg!("status: synsent ->", &socket.status);
-                self.publish_event(socket.get_socket_id(), TCPEventKind::ConnectionCompleted);
-            } else {
-                socket.status = TcpStatus::SynRcvd;
-                socket.send_tcp_packet(
-                    socket.send_param.next,
-                    socket.recv_param.next,
-                    flags::ACK,
-                    &[],
-                )?;
-                dbg!("status: synsent ->", &socket.status);
-            }
+        let is_correct_syn_received = packet.has_flag(flags::ACK)
+            && packet.has_flag(flags::SYN)
+            && socket.send_param.unacked_seq <= packet.get_ack() // means the received ack is not yet acknowledged packet
+            && packet.get_ack() <= socket.send_param.next; // means the received ack is in the range of next sequence number to be send
+
+        if !is_correct_syn_received {
+            return anyhow::Result::Ok(());
         }
+
+        socket.recv_param.next = packet.get_seq() + 1;
+        socket.recv_param.initial_seq = packet.get_seq();
+        socket.send_param.unacked_seq = packet.get_ack();
+        socket.send_param.window = packet.get_window_size();
+
+        let a = socket.send_param.initial_seq <= socket.send_param.unacked_seq;
+        if socket.send_param.unacked_seq > socket.send_param.initial_seq {
+            socket.status = TcpStatus::Established;
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &[],
+            )?;
+            dbg!("status: synsent ->", &socket.status);
+            self.publish_event(socket.get_socket_id(), TCPEventKind::ConnectionCompleted);
+        } else {
+            socket.status = TcpStatus::SynRcvd;
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &[],
+            )?;
+            dbg!("status: synsent ->", &socket.status);
+        }
+
         anyhow::Result::Ok(())
     }
 

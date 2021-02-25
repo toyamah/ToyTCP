@@ -135,16 +135,39 @@ impl Display for TcpStatus {
     }
 }
 
-/// https://tools.ietf.org/html/rfc793#section-3.2
+///
+///    1         2          3          4
+///  ----------|----------|----------|----------
+///         SND.UNA    SND.NXT    SND.UNA
+///                              +SND.WND
+///
+///  1 - old sequence numbers which have been acknowledged
+///  2 - sequence numbers of unacknowledged data
+///  3 - sequence numbers allowed for new data transmission
+///  4 - future sequence numbers which are not yet allowed
+///
+/// Fig4 borrowed by https://tools.ietf.org/html/rfc793#section-3.2
 #[derive(Debug)]
 pub struct SendParam {
+    // un-acknowledge head sequence number
     pub unacked_seq: u32,
+    // next sequence number to be send
     pub next: u32,
     pub window: u16,
     pub initial_seq: u32,
 }
 
-/// https://tools.ietf.org/html/rfc793#section-3.2
+///
+///     1          2          3
+/// ----------|----------|----------
+///        RCV.NXT    RCV.NXT
+///                  +RCV.WND
+///
+///  1 - old sequence numbers which have been acknowledged
+///  2 - sequence numbers allowed for new reception
+///  3 - future sequence numbers which are not yet allowed
+///
+/// Fig5 borrowed by https://tools.ietf.org/html/rfc793#section-3.2
 #[derive(Debug)]
 pub struct RecvParam {
     pub next: u32,
