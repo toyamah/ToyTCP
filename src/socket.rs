@@ -37,7 +37,7 @@ impl Socket {
         local_port: u16,
         remote_port: u16,
         status: TcpStatus,
-    ) -> io::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let (sender, _) = transport_channel(
             65535,
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
@@ -112,7 +112,7 @@ impl Socket {
 
 /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Protocol_operation
 /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol#/media/File:Tcp_state_diagram_fixed_new.svg
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TcpStatus {
     Listen,
     SynSent,
