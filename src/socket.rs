@@ -6,10 +6,11 @@ use pnet::packet::{util, Packet};
 use pnet::transport::{
     transport_channel, TransportChannelType, TransportProtocol, TransportSender,
 };
+use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
-use std::{io, fmt};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
+use std::{fmt, io};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SocketID(pub Ipv4Addr, pub Ipv4Addr, pub u16, pub u16);
@@ -22,6 +23,10 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    // used only by a listening socket
+    pub connected_connection_queue: VecDeque<SocketID>,
+    // used only by a connected socket
+    pub listening_socket: Option<SocketID>,
     sender: TransportSender,
 }
 
@@ -55,6 +60,8 @@ impl Socket {
                 tail: 0,
             },
             status,
+            connected_connection_queue: VecDeque::new(),
+            listening_socket: None,
             sender,
         })
     }

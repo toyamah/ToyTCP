@@ -1,6 +1,7 @@
 use crate::packet::TCPPacket;
 use crate::socket::{Socket, SocketID, TcpStatus};
 use anyhow::Context;
+use anyhow::Result;
 use pnet::packet::{ip::IpNextHeaderProtocols, tcp::TcpPacket, Packet};
 use pnet::transport::{
     self, transport_channel, Ipv4TransportChannelIterator, TransportChannelType, TransportProtocol,
@@ -73,6 +74,34 @@ impl TCP {
         anyhow::Result::Ok(socket_id)
     }
 
+    pub fn listen(&self, local_addr: Ipv4Addr, local_port: u16) -> Result<SocketID> {
+        let socket = Socket::new(
+            local_addr,
+            UNDETERMINED_IP_ADDR,
+            local_port,
+            UNDEFINED_PORT,
+            TcpStatus::Listen,
+        )?;
+        let socket_id = socket.get_socket_id();
+        let mut table = self.sockets.write().unwrap();
+        table.insert(socket_id, socket);
+        Ok(socket_id)
+    }
+
+    pub fn accept(&self, socket_id: SocketID) -> Result<SocketID> {
+        self.wait_event(socket_id, TCPEventKind::ConnectionCompleted);
+
+        let mut table = self.sockets.write().unwrap();
+        let socket = table
+            .get_mut(&socket_id)
+            .context(format!("No such socket: {:?}", socket_id))?;
+        let socked_id = socket
+            .connected_connection_queue
+            .pop_front()
+            .context("no conected socket")?;
+        Ok(socket_id)
+    }
+
     fn receive_handler(&self) {
         dbg!("begin recv thread");
         let (_, mut receiver) = transport_channel(
@@ -130,9 +159,16 @@ impl TCP {
 
             // execute handler based on TcpStatus
             let result = match socket.status {
-                // TcpStatus::Listen => {}
+                TcpStatus::Listen => self.handle_packet_in_listen(
+                    table,
+                    socket.get_socket_id(),
+                    &packet,
+                    remote_addr,
+                ),
                 TcpStatus::SynSent => self.handle_packet_in_synsent(socket, &packet),
-                // TcpStatus::SynRcvd => {}
+                TcpStatus::SynRcvd => {
+                    self.handle_packet_in_synrcvd(table, socket.get_socket_id(), &packet)
+                }
                 // TcpStatus::Established => {}
                 // TcpStatus::FinWait1 => {}
                 // TcpStatus::FinWait2 => {}
@@ -148,6 +184,90 @@ impl TCP {
                 dbg!(err);
             }
         }
+    }
+
+    pub fn handle_packet_in_listen(
+        &self,
+        mut table: RwLockWriteGuard<HashMap<SocketID, Socket>>,
+        listening_socket_id: SocketID,
+        packet: &TCPPacket,
+        remote_addr: Ipv4Addr,
+    ) -> Result<()> {
+        dbg!("handle_packet_in_listen");
+        if packet.has_flag(flags::ACK) {
+            // One of cases in the condition is that each TCP is passive open.
+            // See Fig 12 on https://tools.ietf.org/html/rfc793#section-3.4
+            // Expected to send RST flag which is not implemented in ToyTCP.
+            return Ok(());
+        }
+        if !packet.has_flag(flags::SYN) {
+            return Ok(());
+        }
+
+        let listening_socket = table.get_mut(&listening_socket_id).unwrap();
+        // a socket to be connected
+        let mut new_socket = Socket::new(
+            listening_socket.local_addr,
+            remote_addr,
+            listening_socket.local_port,
+            packet.get_src(),
+            TcpStatus::SynRcvd,
+        )?;
+        new_socket.listening_socket = Some(listening_socket_id);
+        new_socket.recv_param.next = packet.get_ack() + 1;
+        new_socket.recv_param.initial_seq = packet.get_seq();
+        new_socket.send_param.initial_seq = rand::thread_rng().gen_range(1..1 << 31);
+        new_socket.send_param.window = packet.get_window_size();
+        new_socket.send_tcp_packet(
+            new_socket.send_param.initial_seq,
+            new_socket.recv_param.next,
+            flags::SYN | flags::ACK,
+            &[],
+        );
+        new_socket.send_param.next = new_socket.send_param.initial_seq + 1;
+        new_socket.send_param.unacked_seq = new_socket.send_param.initial_seq;
+
+        dbg!(format!("status: listen -> {}", &new_socket.status));
+        table.insert(new_socket.get_socket_id(), new_socket);
+        Ok(())
+    }
+
+    pub fn handle_packet_in_synrcvd(
+        &self,
+        mut table: RwLockWriteGuard<HashMap<SocketID, Socket>>,
+        socket_id: SocketID,
+        packet: &TCPPacket,
+    ) -> Result<()> {
+        dbg!("handle packet in synrcd");
+        let socket = table.get_mut(&socket_id).unwrap();
+
+        let is_expected_packet = packet.has_flag(flags::ACK)
+            && socket.send_param.unacked_seq <= packet.get_ack()
+            && packet.get_ack() <= socket.send_param.next;
+
+        if !is_expected_packet {
+            dbg!("received unexpected packet");
+            return Ok(());
+        }
+
+        socket.recv_param.next = packet.get_seq();
+        socket.send_param.unacked_seq = packet.get_ack();
+        socket.status = TcpStatus::Established;
+        if let Some(listening_socket_id) = socket.listening_socket {
+            let listening_socket = table.get_mut(&listening_socket_id).unwrap();
+            listening_socket
+                .connected_connection_queue
+                .push_back(socket_id);
+            self.publish_event(listening_socket_id, TCPEventKind::ConnectionCompleted);
+            dbg!(format!(
+                "publish event: {:?}, {:?}",
+                &listening_socket_id,
+                TCPEventKind::ConnectionCompleted
+            ));
+            return Ok(());
+        }
+
+        Ok(())
     }
 
     /// handles a received packet in synsent status
