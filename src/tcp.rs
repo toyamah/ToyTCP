@@ -98,7 +98,7 @@ impl TCP {
         let socked_id = socket
             .connected_connection_queue
             .pop_front()
-            .context("no conected socket")?;
+            .context("no connected socket")?;
         Ok(socket_id)
     }
 
@@ -157,18 +157,15 @@ impl TCP {
                 None => continue,
             };
 
+            let socket_status = socket.status.clone();
+            let socket_id = socket.get_socket_id();
+            std::mem::drop(table);
+
             // execute handler based on TcpStatus
-            let result = match socket.status {
-                TcpStatus::Listen => self.handle_packet_in_listen(
-                    table,
-                    socket.get_socket_id(),
-                    &packet,
-                    remote_addr,
-                ),
-                TcpStatus::SynSent => self.handle_packet_in_synsent(socket, &packet),
-                TcpStatus::SynRcvd => {
-                    self.handle_packet_in_synrcvd(table, socket.get_socket_id(), &packet)
-                }
+            let result = match socket_status {
+                TcpStatus::Listen => self.handle_packet_in_listen(socket_id, &packet, remote_addr),
+                TcpStatus::SynSent => self.handle_packet_in_synsent(socket_id, &packet),
+                TcpStatus::SynRcvd => self.handle_packet_in_synrcvd(socket_id, &packet),
                 // TcpStatus::Established => {}
                 // TcpStatus::FinWait1 => {}
                 // TcpStatus::FinWait2 => {}
@@ -176,7 +173,7 @@ impl TCP {
                 // TcpStatus::CloseWait => {}
                 // TcpStatus::LastAck => {}
                 _ => {
-                    dbg!("not implemented {}", &socket.status);
+                    dbg!("not implemented {}", socket_status);
                     Ok(())
                 }
             };
@@ -188,7 +185,6 @@ impl TCP {
 
     pub fn handle_packet_in_listen(
         &self,
-        mut table: RwLockWriteGuard<HashMap<SocketID, Socket>>,
         listening_socket_id: SocketID,
         packet: &TCPPacket,
         remote_addr: Ipv4Addr,
@@ -204,7 +200,9 @@ impl TCP {
             return Ok(());
         }
 
+        let mut table = self.sockets.write().unwrap();
         let listening_socket = table.get_mut(&listening_socket_id).unwrap();
+
         // a socket to be connected
         let mut new_socket = Socket::new(
             listening_socket.local_addr,
@@ -214,8 +212,10 @@ impl TCP {
             TcpStatus::SynRcvd,
         )?;
         new_socket.listening_socket = Some(listening_socket_id);
-        new_socket.recv_param.next = packet.get_ack() + 1;
+        // set recv
         new_socket.recv_param.initial_seq = packet.get_seq();
+        new_socket.recv_param.next = packet.get_seq() + 1;
+        // set send
         new_socket.send_param.initial_seq = rand::thread_rng().gen_range(1..1 << 31);
         new_socket.send_param.window = packet.get_window_size();
         new_socket.send_tcp_packet(
@@ -223,7 +223,7 @@ impl TCP {
             new_socket.recv_param.next,
             flags::SYN | flags::ACK,
             &[],
-        );
+        )?;
         new_socket.send_param.next = new_socket.send_param.initial_seq + 1;
         new_socket.send_param.unacked_seq = new_socket.send_param.initial_seq;
 
@@ -232,13 +232,9 @@ impl TCP {
         Ok(())
     }
 
-    pub fn handle_packet_in_synrcvd(
-        &self,
-        mut table: RwLockWriteGuard<HashMap<SocketID, Socket>>,
-        socket_id: SocketID,
-        packet: &TCPPacket,
-    ) -> Result<()> {
+    pub fn handle_packet_in_synrcvd(&self, socket_id: SocketID, packet: &TCPPacket) -> Result<()> {
         dbg!("handle packet in synrcd");
+        let mut table = self.sockets.write().unwrap();
         let socket = table.get_mut(&socket_id).unwrap();
 
         let is_expected_packet = packet.has_flag(flags::ACK)
@@ -274,10 +270,12 @@ impl TCP {
     /// see https://tools.ietf.org/html/rfc793#section-3.4
     fn handle_packet_in_synsent(
         &self,
-        socket: &mut Socket,
+        socket_id: SocketID,
         packet: &TCPPacket,
     ) -> anyhow::Result<()> {
         dbg!("synsent_handler");
+        let mut table = self.sockets.write().unwrap();
+        let socket = table.get_mut(&socket_id).unwrap();
 
         let is_correct_syn_received = packet.has_flag(flags::ACK)
             && packet.has_flag(flags::SYN)
