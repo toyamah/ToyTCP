@@ -297,8 +297,7 @@ impl TCP {
         let mut table = self.sockets.write().unwrap();
         let socket = table.get_mut(&socket_id).unwrap();
 
-        let is_correct_syn_received = packet.has_flag(flags::ACK)
-            && packet.has_flag(flags::SYN)
+        let is_correct_syn_received = packet.has_flag(flags::ACK | flags::SYN)
             && socket.send_param.unacked_seq <= packet.get_ack() // means the received ack is not yet acknowledged packet
             && packet.get_ack() <= socket.send_param.next; // means the received ack is in the range of next sequence number to be send
 
@@ -311,7 +310,6 @@ impl TCP {
         socket.send_param.unacked_seq = packet.get_ack();
         socket.send_param.window = packet.get_window_size();
 
-        let a = socket.send_param.initial_seq <= socket.send_param.unacked_seq;
         if socket.send_param.unacked_seq > socket.send_param.initial_seq {
             socket.status = TcpStatus::Established;
             socket.send_tcp_packet(
