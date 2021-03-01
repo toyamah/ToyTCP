@@ -1,6 +1,7 @@
 use std::env;
 use std::net::Ipv4Addr;
 use toy_tcp::tcp::TCP;
+use std::io::stdin;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -12,6 +13,11 @@ fn main() -> anyhow::Result<()> {
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> anyhow::Result<()> {
     let tcp = TCP::new();
-    tcp.connect(remote_addr, remote_port)?;
+    let socket_id = tcp.connect(remote_addr, remote_port)?;
+    loop {
+        let mut input = String::new();
+        stdin().read_line(&mut input)?;
+        tcp.send(socket_id, input.as_bytes())?;
+    }
     anyhow::Result::Ok(())
 }

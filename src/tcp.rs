@@ -9,12 +9,12 @@ use pnet::transport::{
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::HashMap;
-use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::{DerefMut, Range};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
+use std::{cmp, io};
 
 const UNDETERMINED_IP_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDEFINED_PORT: u16 = 0;
@@ -100,6 +100,26 @@ impl TCP {
             .pop_front()
             .context("no connected socket")?;
         Ok(socket_id)
+    }
+
+    pub fn send(&self, socket_id: SocketID, buffer: &[u8]) -> Result<()> {
+        let mut cursor = 0;
+        while cursor < buffer.len() {
+            let mut table = self.sockets.write().unwrap();
+            let socket = table
+                .get_mut(&socket_id)
+                .context(format!("no such socket id: {:?}", socket_id))?;
+            let send_size = cmp::min(MSS, buffer.len());
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &buffer[cursor..cursor + send_size],
+            )?;
+            cursor += send_size;
+            socket.send_param.next += send_size as u32;
+        }
+        Ok(())
     }
 
     fn receive_handler(&self) {
