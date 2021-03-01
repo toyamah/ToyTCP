@@ -1,5 +1,7 @@
 use crate::packet::{TCPPacket, SOCKET_BUFFER_SIZE};
+use crate::tcp::flags;
 use anyhow::Context;
+use anyhow::Result;
 use pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
 use pnet::packet::util::ipv4_checksum;
 use pnet::packet::{util, Packet};
@@ -10,6 +12,7 @@ use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
+use std::time::SystemTime;
 use std::{fmt, io};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -23,11 +26,12 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    pub retransmission_queue: VecDeque<RetransmissionEntry>,
     // used only by a listening socket
     pub connected_connection_queue: VecDeque<SocketID>,
     // used only by a connected socket
     pub listening_socket: Option<SocketID>,
-    sender: TransportSender,
+    pub sender: TransportSender,
 }
 
 impl Socket {
@@ -60,6 +64,7 @@ impl Socket {
                 tail: 0,
             },
             status,
+            retransmission_queue: VecDeque::new(),
             connected_connection_queue: VecDeque::new(),
             listening_socket: None,
             sender,
@@ -95,8 +100,14 @@ impl Socket {
             .sender
             .send_to(tcp_packet.clone(), IpAddr::V4(self.remote_addr))
             .context(format!("failed to send: \n {:?}", tcp_packet))?;
-
         dbg!("sent", &tcp_packet);
+
+        if payload.is_empty() && tcp_packet.has_flag(flags::ACK) {
+            return Ok(send_size);
+        }
+        self.retransmission_queue
+            .push_back(RetransmissionEntry::new(tcp_packet));
+
         anyhow::Result::Ok(send_size)
     }
 
@@ -107,6 +118,18 @@ impl Socket {
             self.local_port,
             self.remote_port,
         )
+    }
+
+    pub fn resend_packet(&mut self, mut entry: RetransmissionEntry) -> Result<RetransmissionEntry> {
+        self.sender
+            .send_to(entry.packet.clone(), IpAddr::V4(self.remote_addr))
+            .context(format!(
+                "failed to transmit: packet id = {:?}",
+                entry.packet.get_seq()
+            ))?;
+        entry.transmission_count += 1;
+        entry.latest_transmission_time = SystemTime::now();
+        Ok(entry)
     }
 }
 
@@ -181,4 +204,21 @@ pub struct RecvParam {
     pub window: u16,
     pub initial_seq: u32,
     pub tail: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetransmissionEntry {
+    pub packet: TCPPacket,
+    pub latest_transmission_time: SystemTime,
+    pub transmission_count: u8,
+}
+
+impl RetransmissionEntry {
+    fn new(packet: TCPPacket) -> Self {
+        Self {
+            packet,
+            latest_transmission_time: SystemTime::now(),
+            transmission_count: 1,
+        }
+    }
 }

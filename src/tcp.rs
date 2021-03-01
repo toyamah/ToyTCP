@@ -14,7 +14,8 @@ use std::ops::{DerefMut, Range};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
-use std::{cmp, io};
+use std::time::Duration;
+use std::{cmp, io, thread};
 
 const UNDETERMINED_IP_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDEFINED_PORT: u16 = 0;
@@ -37,6 +38,9 @@ impl TCP {
         });
         let cloned = Arc::clone(&tcp);
         std::thread::spawn(move || cloned.receive_handler());
+
+        let cloned = Arc::clone(&tcp);
+        std::thread::spawn(move || cloned.timer());
         tcp
     }
 
@@ -186,7 +190,7 @@ impl TCP {
                 TcpStatus::Listen => self.handle_packet_in_listen(socket_id, &packet, remote_addr),
                 TcpStatus::SynSent => self.handle_packet_in_synsent(socket_id, &packet),
                 TcpStatus::SynRcvd => self.handle_packet_in_synrcvd(socket_id, &packet),
-                // TcpStatus::Established => {}
+                TcpStatus::Established => self.handle_packet_in_established(socket_id, &packet),
                 // TcpStatus::FinWait1 => {}
                 // TcpStatus::FinWait2 => {}
                 // TcpStatus::TimeWait => {}
@@ -334,6 +338,41 @@ impl TCP {
         anyhow::Result::Ok(())
     }
 
+    fn handle_packet_in_established(&self, socket_id: SocketID, packet: &TCPPacket) -> Result<()> {
+        dbg!("handle packet in established");
+        let mut table = self.sockets.write().unwrap();
+        let socket = table
+            .get_mut(&socket_id)
+            .context(format!("no such socket id {:?}", socket_id))?;
+
+        if socket.send_param.unacked_seq < packet.get_ack()
+            && packet.get_ack() <= socket.send_param.next
+        {
+            socket.send_param.unacked_seq = packet.get_ack();
+            self.delete_acked_segment_from_retransmission_queue(socket);
+        } else if socket.send_param.next < packet.get_ack() {
+            // in case receiving a packet that is not yet sent
+            return Ok(());
+        } else if !packet.has_flag(flags::ACK) {
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    fn delete_acked_segment_from_retransmission_queue(&self, socket: &mut Socket) {
+        dbg!("ack accept", socket.send_param.unacked_seq);
+        while let Some(entry) = socket.retransmission_queue.pop_front() {
+            if socket.send_param.unacked_seq > entry.packet.get_seq() {
+                dbg!("successfully acked", entry.packet.get_seq());
+                self.publish_event(socket.get_socket_id(), TCPEventKind::Acked);
+            } else {
+                socket.retransmission_queue.push_front(entry);
+                break;
+            }
+        }
+    }
+
     fn wait_event(&self, socket_id: SocketID, kind: TCPEventKind) {
         let (lock, cond_var) = &self.event_condvar;
         let mut event = lock.lock().unwrap();
@@ -354,6 +393,40 @@ impl TCP {
         let mut e = lock.lock().unwrap();
         *e = Some(TCPEvent::new(socket_id, kind));
         cond_var.notify_all();
+    }
+
+    fn timer(&self) {
+        dbg!("begin timer thread");
+        loop {
+            let mut table = self.sockets.write().unwrap();
+            for (_, socket) in table.iter_mut() {
+                while let Some(mut entry) = socket.retransmission_queue.pop_front() {
+                    let is_acked = socket.send_param.unacked_seq > entry.packet.get_seq();
+                    if is_acked {
+                        dbg!("successfully acked", entry.packet.get_ack());
+                        continue;
+                    }
+
+                    let is_in_time = entry.latest_transmission_time.elapsed().unwrap()
+                        < Duration::from_secs(RETRANSMISSION_TIMEOUT);
+                    if is_in_time {
+                        socket.retransmission_queue.push_front(entry);
+                        break;
+                    }
+
+                    if entry.transmission_count < MAX_TRANSMISSION {
+                        dbg!("retransmit");
+                        let entry = socket.resend_packet(entry).unwrap();
+                        socket.retransmission_queue.push_back(entry);
+                        break;
+                    }
+
+                    dbg!("reached MAX_TRANSMISSION");
+                }
+            }
+            drop(table);
+            thread::sleep(Duration::from_micros(100));
+        }
     }
 }
 
