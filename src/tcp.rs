@@ -22,7 +22,8 @@ const UNDEFINED_PORT: u16 = 0;
 const MAX_TRANSMISSION: u8 = 5;
 const RETRANSMISSION_TIMEOUT: u64 = 3;
 const MSS: usize = 1460;
-const PORT_RANGE: Range<u16> = 40000..60000;
+// const PORT_RANGE: Range<u16> = 40000..60000;
+const PORT_RANGE: Range<u16> = 2001..4000;
 
 pub struct TCP {
     sockets: RwLock<HashMap<SocketID, Socket>>,
