@@ -111,10 +111,27 @@ impl TCP {
         let mut cursor = 0;
         while cursor < buffer.len() {
             let mut table = self.sockets.write().unwrap();
-            let socket = table
+            let mut socket = table
                 .get_mut(&socket_id)
                 .context(format!("no such socket id: {:?}", socket_id))?;
-            let send_size = cmp::min(MSS, buffer.len());
+            let mut send_size = cmp::min(
+                MSS,
+                cmp::min(socket.send_param.window as usize, buffer.len() - cursor),
+            );
+            while send_size == 0 {
+                dbg!("unable to slide send window");
+                drop(table);
+                self.wait_event(socket_id, TCPEventKind::Acked);
+                table = self.sockets.write().unwrap();
+                socket = table
+                    .get_mut(&socket_id)
+                    .context(format!("no such socket: {:?}", socket_id))?;
+                send_size = cmp::min(
+                    MSS,
+                    cmp::min(socket.send_param.window as usize, buffer.len() - cursor),
+                );
+            }
+            dbg!("current window size", socket.send_param.window);
             socket.send_tcp_packet(
                 socket.send_param.next,
                 socket.recv_param.next,
@@ -123,6 +140,9 @@ impl TCP {
             )?;
             cursor += send_size;
             socket.send_param.next += send_size as u32;
+            socket.send_param.window -= send_size as u16;
+            drop(table);
+            thread::sleep(Duration::from_millis(1));
         }
         Ok(())
     }
@@ -154,7 +174,7 @@ impl TCP {
                 None => continue,
             };
             if !packet.correct_checksum(local_addr, remote_addr) {
-                dbg!("invalid checksum");
+                dbg!("invalid checksum", packet, local_addr, remote_addr);
                 continue;
             }
 
@@ -219,9 +239,11 @@ impl TCP {
             // One of cases in the condition is that each TCP is passive open.
             // See Fig 12 on https://tools.ietf.org/html/rfc793#section-3.4
             // Expected to send RST flag which is not implemented in ToyTCP.
+            dbg!("flag is ack");
             return Ok(());
         }
         if !packet.has_flag(flags::SYN) {
+            dbg!("flag is not syn");
             return Ok(());
         }
 
@@ -236,7 +258,6 @@ impl TCP {
             packet.get_src(),
             TcpStatus::SynRcvd,
         )?;
-        new_socket.listening_socket = Some(listening_socket_id);
         // set recv
         new_socket.recv_param.initial_seq = packet.get_seq();
         new_socket.recv_param.next = packet.get_seq() + 1;
@@ -251,6 +272,7 @@ impl TCP {
         )?;
         new_socket.send_param.next = new_socket.send_param.initial_seq + 1;
         new_socket.send_param.unacked_seq = new_socket.send_param.initial_seq;
+        new_socket.listening_socket = Some(listening_socket.get_socket_id());
 
         dbg!(format!("status: listen -> {}", &new_socket.status));
         table.insert(new_socket.get_socket_id(), new_socket);
@@ -307,6 +329,14 @@ impl TCP {
             && packet.get_ack() <= socket.send_param.next; // means the received ack is in the range of next sequence number to be send
 
         if !is_correct_syn_received {
+            dbg!(
+                "incorrect syn received",
+                packet.has_flag(flags::ACK),
+                packet.has_flag(flags::SYN),
+                socket.send_param.unacked_seq,
+                packet.get_ack(),
+                socket.send_param.next
+            );
             return anyhow::Result::Ok(());
         }
 
@@ -366,6 +396,7 @@ impl TCP {
         while let Some(entry) = socket.retransmission_queue.pop_front() {
             if socket.send_param.unacked_seq > entry.packet.get_seq() {
                 dbg!("successfully acked", entry.packet.get_seq());
+                socket.send_param.window += entry.packet.payload().len() as u16;
                 self.publish_event(socket.get_socket_id(), TCPEventKind::Acked);
             } else {
                 socket.retransmission_queue.push_front(entry);
@@ -400,11 +431,13 @@ impl TCP {
         dbg!("begin timer thread");
         loop {
             let mut table = self.sockets.write().unwrap();
-            for (_, socket) in table.iter_mut() {
+            for (socket_id, socket) in table.iter_mut() {
                 while let Some(mut entry) = socket.retransmission_queue.pop_front() {
                     let is_acked = socket.send_param.unacked_seq > entry.packet.get_seq();
                     if is_acked {
                         dbg!("successfully acked", entry.packet.get_ack());
+                        socket.send_param.window += entry.packet.payload().len() as u16;
+                        self.publish_event(*socket_id, TCPEventKind::Acked);
                         continue;
                     }
 

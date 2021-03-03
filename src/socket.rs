@@ -86,7 +86,8 @@ impl Socket {
         tcp_packet.set_data_offset(5);
         tcp_packet.set_flag(flag);
         tcp_packet.set_window_size(self.recv_param.window);
-        tcp_packet.set_checksum(ipv4_checksum(
+        tcp_packet.set_payload(payload);
+        tcp_packet.set_checksum(util::ipv4_checksum(
             &tcp_packet.packet(),
             8,
             &[],
@@ -94,7 +95,6 @@ impl Socket {
             &self.remote_addr,
             IpNextHeaderProtocols::Tcp,
         ));
-        tcp_packet.set_payload(payload);
 
         let send_size = self
             .sender
@@ -127,6 +127,7 @@ impl Socket {
                 "failed to transmit: packet id = {:?}",
                 entry.packet.get_seq()
             ))?;
+        // dbg!("resent", &entry.packet);
         entry.transmission_count += 1;
         entry.latest_transmission_time = SystemTime::now();
         Ok(entry)
@@ -177,7 +178,7 @@ impl Display for TcpStatus {
 ///  4 - future sequence numbers which are not yet allowed
 ///
 /// Fig4 borrowed by https://tools.ietf.org/html/rfc793#section-3.2
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SendParam {
     // un-acknowledge head sequence number
     pub unacked_seq: u32,
