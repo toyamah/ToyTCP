@@ -177,13 +177,56 @@ impl TCP {
         Ok(copy_size)
     }
 
+    fn close(&self, socket_id: SocketID) -> Result<()> {
+        let mut table = self.sockets.write().unwrap();
+        let socket = table.get_mut(&socket_id).unwrap();
+
+        socket.send_tcp_packet(
+            socket.send_param.next,
+            socket.recv_param.next,
+            flags::FIN | flags::ACK,
+            &[],
+        )?;
+        socket.send_param.next += 1;
+
+        match socket.status {
+            TcpStatus::Established => {
+                socket.status = TcpStatus::FinWait1; // means waiting for a termination request from the server
+                drop(table);
+                self.wait_event(socket_id, TCPEventKind::ConnectionClosed);
+                self.sockets.write().unwrap().remove(&socket_id);
+                dbg!("closed & removed", socket_id);
+            }
+            TcpStatus::Listen => {
+                socket.status = TcpStatus::LastAck; // means waiting for an ack of the pre-sent termination request to the client
+                drop(table);
+                self.wait_event(socket_id, TCPEventKind::ConnectionClosed);
+                self.sockets.write().unwrap().remove(&socket_id);
+                dbg!("closed & removed", socket_id);
+            }
+            TcpStatus::CloseWait => {
+                table.remove(&socket_id);
+            }
+            TcpStatus::SynSent
+            | TcpStatus::SynRcvd
+            | TcpStatus::FinWait1
+            | TcpStatus::FinWait2
+            | TcpStatus::TimeWait
+            | TcpStatus::LastAck => {
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
     fn receive_handler(&self) {
         dbg!("begin recv thread");
         let (_, mut receiver) = transport_channel(
             65535,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         )
-            .unwrap();
+        .unwrap();
         let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
         loop {
             let (packet, remote_addr) = match packet_iter.next() {
@@ -415,6 +458,48 @@ impl TCP {
         }
         if !packet.payload().is_empty() {
             self.process_payload(socket, packet)?;
+        }
+
+        Ok(())
+    }
+
+    /// in case of Active Close
+    /// see https://en.wikipedia.org/wiki/File:Tcp_state_diagram_fixed_new.svg
+    fn handle_packet_in_fin_wait(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+        dbg!("handle packet in FIN-WAIT1 or FIN-WAIT2");
+        let is_sent_packet = socket.send_param.unacked_seq < packet.get_ack()
+            && packet.get_ack() < socket.send_param.next;
+        if !is_sent_packet {
+            dbg!("not yet send packet");
+            return Ok(());
+        }
+        if !packet.has_flag(flags::ACK) {
+            dbg!("flag is not ACK flag");
+            return Ok(());
+        }
+
+        socket.send_param.unacked_seq = packet.get_ack();
+        self.delete_acked_segment_from_retransmission_queue(socket);
+        if !packet.payload().is_empty() {
+            self.process_payload(socket, packet)?;
+        }
+
+        if socket.status == TcpStatus::FinWait1
+            && socket.send_param.next == socket.send_param.unacked_seq
+        {
+            socket.status = TcpStatus::FinWait2;
+            dbg!("status: FIN_WAIT1 -> FIN_WAIT2");
+        }
+
+        if packet.has_flag(flags::FIN) {
+            socket.recv_param.next += 1;
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &[],
+            )?;
+            self.publish_event(socket.get_socket_id(), TCPEventKind::ConnectionClosed);
         }
 
         Ok(())

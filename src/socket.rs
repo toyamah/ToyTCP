@@ -138,7 +138,7 @@ impl Socket {
 
 /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Protocol_operation
 /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol#/media/File:Tcp_state_diagram_fixed_new.svg
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TcpStatus {
     Listen,
     SynSent,
