@@ -291,11 +291,13 @@ impl TCP {
                 TcpStatus::SynSent => self.handle_packet_in_synsent(socket_id, &packet),
                 TcpStatus::SynRcvd => self.handle_packet_in_synrcvd(socket_id, &packet),
                 TcpStatus::Established => self.handle_packet_in_established(socket_id, &packet),
-                // TcpStatus::FinWait1 => {}
-                // TcpStatus::FinWait2 => {}
+                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
+                    self.handle_packet_in_fin_wait(socket, &packet)
+                }
                 // TcpStatus::TimeWait => {}
-                // TcpStatus::CloseWait => {}
-                // TcpStatus::LastAck => {}
+                TcpStatus::CloseWait | TcpStatus::LastAck => {
+                    self.handle_packet_in_close(socket, &packet)
+                }
                 _ => {
                     dbg!("not implemented {}", socket_status);
                     Ok(())
@@ -521,6 +523,12 @@ impl TCP {
         }
 
         Ok(())
+    }
+
+    fn handle_packet_in_close(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+        dbg!("handle packet CLOSE_WAIT or LAST_ACK");
+        socket.send_param.unacked_seq = packet.get_ack();
+        OK(())
     }
 
     fn process_payload(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
