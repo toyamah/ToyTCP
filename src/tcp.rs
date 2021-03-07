@@ -156,6 +156,12 @@ impl TCP {
         // calc received_size while waiting for incoming data
         let mut received_size = socket.recv_buffer.len() - socket.recv_param.window as usize;
         while received_size == 0 {
+            match socket.status {
+                // break because of closing the connection
+                TcpStatus::CloseWait | TcpStatus::LastAck | TcpStatus::TimeWait => break,
+                _ => {}
+            }
+
             drop(table);
             dbg!("waiting for incoming data", socket_id);
             self.wait_event(socket_id, TCPEventKind::DataArrived);
@@ -458,6 +464,18 @@ impl TCP {
         }
         if !packet.payload().is_empty() {
             self.process_payload(socket, packet)?;
+        }
+
+        if packet.has_flag(flags::FIN) {
+            socket.recv_param.next += 1;
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &[],
+            )?;
+            socket.status = TcpStatus::CloseWait;
+            self.publish_event(socket.get_socket_id(), TCPEventKind::DataArrived);
         }
 
         Ok(())
