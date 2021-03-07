@@ -183,7 +183,7 @@ impl TCP {
             65535,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         )
-        .unwrap();
+            .unwrap();
         let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
         loop {
             let (packet, remote_addr) = match packet_iter.next() {
@@ -422,7 +422,7 @@ impl TCP {
 
     fn process_payload(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
         // loss_size is 0 if segment loss doesn't occur
-        let loss_size = packet.get_seq() - socket.recv_param.next;
+        let loss_size = (packet.get_seq() - socket.recv_param.next) as usize;
         let offset = socket.recv_buffer.len() - socket.recv_param.window as usize + loss_size;
         let copy_size = cmp::min(packet.payload().len(), socket.recv_buffer.len() - offset);
 
