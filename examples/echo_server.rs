@@ -23,7 +23,7 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
             let mut buffer = [0; 1024];
             loop {
                 let copy_size = cloned_tcp.recv(connected_socket, &mut buffer).unwrap();
-                dbg!("copy_size", copy_size);
+                // dbg!("copy_size", copy_size);
                 if copy_size == 0 {
                     return;
                 }

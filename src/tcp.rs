@@ -159,6 +159,7 @@ impl TCP {
             drop(table);
             dbg!("waiting for incoming data", socket_id);
             self.wait_event(socket_id, TCPEventKind::DataArrived);
+            // Received DataArrived event means recv_buffer has a received payload and recv_param.window is updated. see process_payload method
             table = self.sockets.write().unwrap();
             socket = table
                 .get_mut(&socket_id)
@@ -420,10 +421,12 @@ impl TCP {
     }
 
     fn process_payload(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
-        let offset = socket.recv_buffer.len() - socket.recv_param.window as usize
-            + (packet.get_seq() - socket.recv_param.next) as usize;
+        // loss_size is 0 if segment loss doesn't occur
+        let loss_size = packet.get_seq() - socket.recv_param.next;
+        let offset = socket.recv_buffer.len() - socket.recv_param.window as usize + loss_size;
         let copy_size = cmp::min(packet.payload().len(), socket.recv_buffer.len() - offset);
 
+        // copy received payload into recv_buffer
         socket.recv_buffer[offset..offset + copy_size]
             .copy_from_slice(&packet.payload()[..copy_size]);
 
@@ -448,7 +451,8 @@ impl TCP {
             dbg!("recv buffer overflow");
         }
 
-        dbg!("publish", socket.get_socket_id());
+        // publish event to proceed recv method
+        dbg!("publish DataArrived", socket.get_socket_id());
         self.publish_event(socket.get_socket_id(), TCPEventKind::DataArrived);
         Ok(())
     }
