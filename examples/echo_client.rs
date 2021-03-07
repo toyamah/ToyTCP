@@ -18,6 +18,9 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> anyhow::Result<()> {
         let mut input = String::new();
         stdin().read_line(&mut input)?;
         tcp.send(socket_id, input.as_bytes())?;
+
+        let mut buffer = vec![0; 1500];
+        let n = tcp.recv(socket_id, &mut buffer)?;
+        println!("> {}", std::str::from_utf8(&buffer[..n])?);
     }
-    anyhow::Result::Ok(())
 }

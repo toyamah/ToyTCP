@@ -26,6 +26,7 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    pub recv_buffer: Vec<u8>,
     pub retransmission_queue: VecDeque<RetransmissionEntry>,
     // used only by a listening socket
     pub connected_connection_queue: VecDeque<SocketID>,
@@ -64,6 +65,7 @@ impl Socket {
                 tail: 0,
             },
             status,
+            recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
             retransmission_queue: VecDeque::new(),
             connected_connection_queue: VecDeque::new(),
             listening_socket: None,

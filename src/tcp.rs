@@ -100,7 +100,7 @@ impl TCP {
         let socket = table
             .get_mut(&socket_id)
             .context(format!("No such socket: {:?}", socket_id))?;
-        let socked_id = socket
+        let socket_id = socket
             .connected_connection_queue
             .pop_front()
             .context("no connected socket")?;
@@ -145,6 +145,35 @@ impl TCP {
             thread::sleep(Duration::from_millis(1));
         }
         Ok(())
+    }
+
+    pub fn recv(&self, socket_id: SocketID, buffer: &mut [u8]) -> Result<usize> {
+        let mut table = self.sockets.write().unwrap();
+        let mut socket = table
+            .get_mut(&socket_id)
+            .context(format!("no such socket: {:?}", socket_id))?;
+
+        // calc received_size while waiting for incoming data
+        let mut received_size = socket.recv_buffer.len() - socket.recv_param.window as usize;
+        while received_size == 0 {
+            drop(table);
+            dbg!("waiting for incoming data", socket_id);
+            self.wait_event(socket_id, TCPEventKind::DataArrived);
+            table = self.sockets.write().unwrap();
+            socket = table
+                .get_mut(&socket_id)
+                .context(format!("no such socket: {:?}", socket_id))?;
+            received_size = socket.recv_buffer.len() - socket.recv_param.window as usize;
+        }
+
+        // dbg!("received_size", received_size);
+        let copy_size = cmp::min(buffer.len(), received_size);
+        // copy received_data into buffer
+        buffer[..copy_size].copy_from_slice(&socket.recv_buffer[..copy_size]);
+        // move the rest to the head of recv_buffer
+        socket.recv_buffer.copy_within(copy_size.., 0);
+        socket.recv_param.window += copy_size as u16;
+        Ok(copy_size)
     }
 
     fn receive_handler(&self) {
@@ -274,7 +303,7 @@ impl TCP {
         new_socket.send_param.unacked_seq = new_socket.send_param.initial_seq;
         new_socket.listening_socket = Some(listening_socket.get_socket_id());
 
-        dbg!(format!("status: listen -> {}", &new_socket.status));
+        dbg!("status: listen -> ", &new_socket.status);
         table.insert(new_socket.get_socket_id(), new_socket);
         Ok(())
     }
@@ -298,15 +327,11 @@ impl TCP {
         socket.status = TcpStatus::Established;
         if let Some(listening_socket_id) = socket.listening_socket {
             let listening_socket = table.get_mut(&listening_socket_id).unwrap();
+            dbg!("synrcd, socket_id = ", socket_id);
             listening_socket
                 .connected_connection_queue
                 .push_back(socket_id);
             self.publish_event(listening_socket_id, TCPEventKind::ConnectionCompleted);
-            dbg!(format!(
-                "publish event: {:?}, {:?}",
-                &listening_socket_id,
-                TCPEventKind::ConnectionCompleted
-            ));
             return Ok(());
         }
 
@@ -387,7 +412,44 @@ impl TCP {
         } else if !packet.has_flag(flags::ACK) {
             return Ok(());
         }
+        if !packet.payload().is_empty() {
+            self.process_payload(socket, packet)?;
+        }
 
+        Ok(())
+    }
+
+    fn process_payload(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+        let offset = socket.recv_buffer.len() - socket.recv_param.window as usize
+            + (packet.get_seq() - socket.recv_param.next) as usize;
+        let copy_size = cmp::min(packet.payload().len(), socket.recv_buffer.len() - offset);
+
+        socket.recv_buffer[offset..offset + copy_size]
+            .copy_from_slice(&packet.payload()[..copy_size]);
+
+        // use max to support loss retransmission. if it occurs, tail value is greater.
+        socket.recv_param.tail =
+            cmp::max(socket.recv_param.tail, packet.get_seq() + copy_size as u32);
+
+        let received_in_expected_order = packet.get_seq() == socket.recv_param.next;
+        if received_in_expected_order {
+            socket.recv_param.next = socket.recv_param.tail;
+            socket.recv_param.window -= (socket.recv_param.tail - packet.get_seq()) as u16;
+        }
+
+        if copy_size > 0 {
+            socket.send_tcp_packet(
+                socket.send_param.next,
+                socket.recv_param.next,
+                flags::ACK,
+                &[],
+            )?;
+        } else {
+            dbg!("recv buffer overflow");
+        }
+
+        dbg!("publish", socket.get_socket_id());
+        self.publish_event(socket.get_socket_id(), TCPEventKind::DataArrived);
         Ok(())
     }
 
