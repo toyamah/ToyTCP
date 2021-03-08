@@ -135,11 +135,13 @@ impl Debug for TCPPacket {
         dst: {},
         flag: {},
         payload_len: {},
+        seg: {},
         ack: {}",
             self.get_src(),
             self.get_dest(),
             tcp::flags::flag_to_string(self.get_flag()),
             self.payload().len(),
+            self.get_seq(),
             self.get_ack()
         )
     }

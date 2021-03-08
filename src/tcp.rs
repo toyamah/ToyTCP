@@ -183,7 +183,7 @@ impl TCP {
         Ok(copy_size)
     }
 
-    fn close(&self, socket_id: SocketID) -> Result<()> {
+    pub fn close(&self, socket_id: SocketID) -> Result<()> {
         let mut table = self.sockets.write().unwrap();
         let socket = table.get_mut(&socket_id).unwrap();
 
@@ -292,11 +292,11 @@ impl TCP {
                 TcpStatus::SynRcvd => self.handle_packet_in_synrcvd(socket_id, &packet),
                 TcpStatus::Established => self.handle_packet_in_established(socket_id, &packet),
                 TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
-                    self.handle_packet_in_fin_wait(socket, &packet)
+                    self.handle_packet_in_fin_wait(socket_id, &packet)
                 }
                 // TcpStatus::TimeWait => {}
                 TcpStatus::CloseWait | TcpStatus::LastAck => {
-                    self.handle_packet_in_close(socket, &packet)
+                    self.handle_packet_in_close(socket_id, &packet)
                 }
                 _ => {
                     dbg!("not implemented {}", socket_status);
@@ -469,7 +469,7 @@ impl TCP {
         }
 
         if packet.has_flag(flags::FIN) {
-            socket.recv_param.next += 1;
+            socket.recv_param.next = packet.get_seq() + 1;
             socket.send_tcp_packet(
                 socket.send_param.next,
                 socket.recv_param.next,
@@ -479,18 +479,20 @@ impl TCP {
             socket.status = TcpStatus::CloseWait;
             self.publish_event(socket.get_socket_id(), TCPEventKind::DataArrived);
         }
-
         Ok(())
     }
 
     /// in case of Active Close
     /// see https://en.wikipedia.org/wiki/File:Tcp_state_diagram_fixed_new.svg
-    fn handle_packet_in_fin_wait(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+    fn handle_packet_in_fin_wait(&self, socket_id: SocketID, packet: &TCPPacket) -> Result<()> {
         dbg!("handle packet in FIN-WAIT1 or FIN-WAIT2");
+        let mut table = self.sockets.write().unwrap();
+        let mut socket = table.get_mut(&socket_id).unwrap();
+
         let is_sent_packet = socket.send_param.unacked_seq < packet.get_ack()
-            && packet.get_ack() < socket.send_param.next;
-        if !is_sent_packet {
-            dbg!("not yet send packet");
+            && packet.get_ack() <= socket.send_param.next;
+        if !is_sent_packet && socket.send_param.next < packet.get_ack(){
+            dbg!("not yet sent segment");
             return Ok(());
         }
         if !packet.has_flag(flags::ACK) {
@@ -525,10 +527,12 @@ impl TCP {
         Ok(())
     }
 
-    fn handle_packet_in_close(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+    fn handle_packet_in_close(&self, socket_id: SocketID, packet: &TCPPacket) -> Result<()> {
         dbg!("handle packet CLOSE_WAIT or LAST_ACK");
+        let mut table = self.sockets.write().unwrap();
+        let mut socket = table.get_mut(&socket_id).unwrap();
         socket.send_param.unacked_seq = packet.get_ack();
-        OK(())
+        Ok(())
     }
 
     fn process_payload(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
@@ -615,6 +619,12 @@ impl TCP {
                         dbg!("successfully acked", entry.packet.get_ack());
                         socket.send_param.window += entry.packet.payload().len() as u16;
                         self.publish_event(*socket_id, TCPEventKind::Acked);
+
+                        if entry.packet.has_flag(flags::FIN) && socket.status == TcpStatus::LastAck
+                        {
+                            self.publish_event(*socket_id, TCPEventKind::ConnectionClosed);
+                        }
+
                         continue;
                     }
 
@@ -631,8 +641,15 @@ impl TCP {
                         socket.retransmission_queue.push_back(entry);
                         break;
                     }
-
                     dbg!("reached MAX_TRANSMISSION");
+
+                    if entry.packet.has_flag(flags::FIN)
+                        && (socket.status == TcpStatus::LastAck
+                            || socket.status == TcpStatus::FinWait1
+                            || socket.status == TcpStatus::FinWait2)
+                    {
+                        self.publish_event(*socket_id, TCPEventKind::ConnectionClosed);
+                    }
                 }
             }
             drop(table);

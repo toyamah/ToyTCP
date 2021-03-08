@@ -16,20 +16,22 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     let listening_socket = tcp.listen(local_addr, local_port)?;
     dbg!("listening");
     loop {
-        let connected_socket = tcp.accept(listening_socket)?;
-        dbg!(format!("accepted: {:?}", connected_socket));
+        let connected_socket_id = tcp.accept(listening_socket)?;
+        dbg!(format!("accepted: {:?}", connected_socket_id));
         let cloned_tcp = tcp.clone();
         std::thread::spawn(move || {
             let mut buffer = [0; 1024];
             loop {
-                let copy_size = cloned_tcp.recv(connected_socket, &mut buffer).unwrap();
+                let copy_size = cloned_tcp.recv(connected_socket_id, &mut buffer).unwrap();
                 // dbg!("copy_size", copy_size);
                 if copy_size == 0 {
+                    dbg!("closing connection...");
+                    cloned_tcp.close(connected_socket_id).unwrap();
                     return;
                 }
                 print!("> {}", std::str::from_utf8(&buffer[..copy_size]).unwrap());
                 cloned_tcp
-                    .send(connected_socket, &buffer[..copy_size])
+                    .send(connected_socket_id, &buffer[..copy_size])
                     .unwrap();
             }
         });
