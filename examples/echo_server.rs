@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::env;
 use std::net::Ipv4Addr;
 use toy_tcp::tcp::TCP;
+use std::sync::Arc;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -18,7 +19,7 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     loop {
         let connected_socket_id = tcp.accept(listening_socket)?;
         dbg!(format!("accepted: {:?}", connected_socket_id));
-        let cloned_tcp = tcp.clone();
+        let cloned_tcp = Arc::clone(&tcp);
         std::thread::spawn(move || {
             let mut buffer = [0; 1024];
             loop {

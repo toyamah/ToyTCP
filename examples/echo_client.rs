@@ -2,6 +2,7 @@ use std::env;
 use std::net::Ipv4Addr;
 use toy_tcp::tcp::TCP;
 use std::io::stdin;
+use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -15,7 +16,7 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> anyhow::Result<()> {
     let tcp = TCP::new();
     let socket_id = tcp.connect(remote_addr, remote_port)?;
 
-    let cloned_tcp = tcp.clone();
+    let cloned_tcp = Arc::clone(&tcp);
     ctrlc::set_handler(move || {
         cloned_tcp.close(socket_id).unwrap();
         std::process::exit(0);
