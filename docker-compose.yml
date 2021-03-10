@@ -1,9 +1,0 @@
-services:
-  toy_tcp:
-    build: .
-    privileged: true
-#    stdin_open: true
-    tty: true
-    volumes:
-      - .:/toy_tcp/
-    command: sh -c "sudo sh /tmp/setup.sh && /bin/sh"
