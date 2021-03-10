@@ -294,13 +294,12 @@ impl TCP {
                 TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
                     self.handle_packet_in_fin_wait(socket_id, &packet)
                 }
-                // TcpStatus::TimeWait => {}
+                TcpStatus::TimeWait => {
+                    dbg!("not implemented TimeWait");
+                    Ok(())
+                }
                 TcpStatus::CloseWait | TcpStatus::LastAck => {
                     self.handle_packet_in_close(socket_id, &packet)
-                }
-                _ => {
-                    dbg!("not implemented {}", socket_status);
-                    Ok(())
                 }
             };
             if let Err(err) = result {
@@ -491,7 +490,7 @@ impl TCP {
 
         let is_sent_packet = socket.send_param.unacked_seq < packet.get_ack()
             && packet.get_ack() <= socket.send_param.next;
-        if !is_sent_packet && socket.send_param.next < packet.get_ack(){
+        if !is_sent_packet && socket.send_param.next < packet.get_ack() {
             dbg!("not yet sent segment");
             return Ok(());
         }
